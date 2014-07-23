@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 -- | Simple program to proxy a SFTP session. I.e. a SFTP client will spawn us
 -- through SSH instead of a real sftp executable. It won't see any difference
@@ -10,12 +11,15 @@ import Control.Concurrent (forkIO)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar, MVar)
 import Control.Exception (finally)
 import Control.Monad (when)
+import Control.Monad.Trans.Class
+import Control.Monad.Trans.Writer
 import qualified Data.Attoparsec.ByteString as AB (take)
-import Data.Attoparsec.ByteString hiding (take)
+import Data.Attoparsec.ByteString hiding (parse, take)
 import Data.Bits (unsafeShiftL, (.&.), Bits)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Base16 as Base16
 import qualified Data.ByteString.Char8 as BC
+import Data.List (partition)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T (decodeUtf8)
@@ -54,11 +58,24 @@ main = do
   inThread <- forkIO $ S.connect is' sftpInp
   errThread <- forkIO $ S.connect sftpErr S.stderr
   _ <- forkIO $ S.connect is2' S.stdout
-  S.withFileAsOutput "/home/sftp/debug.txt" $ \observe -> do
-    _ <- forkIO $ protocol observe ">>> " is
-    protocol observe "<<< " is2
+  -- S.withFileAsOutput "/home/sftp/debug.txt" $ \observe -> do
+  mvar <- newEmptyMVar
+  _ <- forkIO $ do
+    ps <- execWriterT (protocol is)
+    putMVar mvar ps
+  ps <- execWriterT (protocol is2)
+  ps' <- takeMVar mvar
+  S.withFileAsOutput "/home/sftp/debug.txt" $ \os -> do
+    mapM_ (\(s, p) -> S.write (Just . BC.pack $ s ++ display p ++ "\n") os) $ merge ps' ps
+  return ()
   -- takeMVar inThread
   -- takeMVar errThread
+
+merge [] ys = map ("<<< ",) ys
+merge (x:xs) ys = (">>> ", x) : ("<<< ", y') : merge xs ys'
+  where (y', ys') = case partition ((== packetId x) . packetId) ys of
+          (y:ys1, ys2) -> (y, ys1 ++ ys2)
+          (_, ys2) -> (Unknown (RequestId 0) "Missing response.", ys2)
 
 waitableForkIO :: IO () -> IO (MVar ())
 waitableForkIO io = do
@@ -101,59 +118,94 @@ splitIS is = do
 -- Main io-streams parsers
 ----------------------------------------------------------------------
 
+parse p = lift . S.parseFromStream p
+
 -- | `observe` is just an output stream where to show debugging info.
 -- This is normally stderr. `prefix` is a few characters than can be
 -- used to identify different source, typically the sftp client output
 -- versus the sftp server output.
-protocol :: OutputStream ByteString -> ByteString -> InputStream ByteString -> IO ()
-protocol observe prefix is = do
+protocol :: InputStream ByteString -> WriterT [Packet] IO ()
+protocol is = do
   -- Actual order of packet must be:
   -- - init
   -- - extended / version-select (if any)
   -- ...
-  packets <- S.parseFromStream (many' packet) is
-  mapM_ (flip S.write observe . Just . (prefix `BC.append`) . BC.pack .
-    (++ "\n") . display) packets
-  return ()
+  packets <- parse (many' packet) is
+  tell packets
 
 display :: Packet -> String
-display p = case p of
-  FxpInit version -> "SSH_FXP_INIT " ++ show version
-  FxpVersion version ps -> "SSH_FXP_VERSION " ++ show version ++ "\n  " ++ show ps
-  FxpOpen i filename flags attrs ->
-    "SSH_FXP_OPEN " ++ T.unpack filename ++ " " ++ take 64 (show attrs)
-  FxpClose i h -> "SSH_FXP_CLOSE " ++ BC.unpack (Base16.encode h)
-  FxpRead bs -> "SSH_FXP_READ " ++ take 64 (show bs)
-  FxpWrite i h offset bs -> "SSH_FXP_WRITE " ++ BC.unpack (Base16.encode h) ++ " " ++ show offset ++ "\n" ++ take 64 (show bs)
-  FxpLStat i path -> "SSH_FXP_LSTAT " ++ T.unpack path
-  FxpFStat bs -> "SSH_FXP_FSTAT " ++ take 64 (show bs)
-  FxpSetStat i path bs -> "SSH_FXP_SETSTAT " ++ T.unpack path
-  FxpFSetStat i h bs -> "SSH_FXP_FSETSTAT " ++ BC.unpack (Base16.encode h)
-  FxpOpenDir i dirname -> "SSH_FXP_OPENDIR " ++ T.unpack dirname
-  FxpReadDir bs -> "SSH_FXP_READDIR " ++ take 64 (show bs)
-  FxpRemove bs -> "SSH_FXP_REMOVE " ++ take 64 (show bs)
-  FxpMkDir i dirname bs -> "SSH_FXP_MKDIR " ++ T.unpack dirname
-  FxpRmDir bs -> "SSH_FXP_RMDIR " ++ take 64 (show bs)
-  FxpRealPath i path m -> "SSH_FXP_REALPATH " ++ T.unpack path ++ " " ++ show m
-  FxpStat i path -> "SSH_FXP_STAT " ++ T.unpack path
-  FxpRename bs -> "SSH_FXP_RENAME " ++ take 64 (show bs)
-  FxpReadLink bs -> "SSH_FXP_READLINK " ++ take 64 (show bs)
+display p = short p ++ (let d = description p in if null d then "" else " " ++ d)
 
-  FxpLink bs -> "SSH_FXP_LINK " ++ take 64 (show bs)
-  FxpBlock bs -> "SSH_FXP_BLOCK " ++ take 64 (show bs)
-  FxpUnblock bs -> "SSH_FXP_UNBLOCK " ++ take 64 (show bs)
+description p = case p of
+  FxpInit version -> ""
+  FxpVersion version ps -> show ps
+  FxpOpen i filename flags attrs -> T.unpack filename ++ " " ++ take 64 (show attrs)
+  FxpClose i h -> BC.unpack (Base16.encode h)
+  FxpRead i bs -> take 64 (show bs)
+  FxpWrite i h offset bs -> BC.unpack (Base16.encode h) ++ " " ++ show offset ++ "\n" ++ take 64 (show bs)
+  FxpLStat i path -> T.unpack path
+  FxpFStat i bs -> take 64 (show bs)
+  FxpSetStat i path bs -> T.unpack path
+  FxpFSetStat i h bs -> BC.unpack (Base16.encode h)
+  FxpOpenDir i dirname -> T.unpack dirname
+  FxpReadDir i bs -> take 64 (show bs)
+  FxpRemove i bs -> take 64 (show bs)
+  FxpMkDir i dirname bs -> T.unpack dirname
+  FxpRmDir i bs -> take 64 (show bs)
+  FxpRealPath i path m -> T.unpack path ++ " " ++ show m
+  FxpStat i path -> T.unpack path
+  FxpRename i bs -> take 64 (show bs)
+  FxpReadLink i bs -> take 64 (show bs)
 
-  FxpStatus i code msg tag bs -> "SSH_FXP_STATUS " ++ show code ++ " " ++
-    T.unpack msg ++ " " ++ take 64 (show bs)
+  FxpLink i bs -> take 64 (show bs)
+  FxpBlock i bs -> take 64 (show bs)
+  FxpUnblock i bs -> take 64 (show bs)
+
+  FxpStatus i code msg tag bs -> show code ++ " " ++ T.unpack msg ++ " " ++ take 64 (show bs)
   -- Handles are opaque strings; we choose to display them in hex.
-  FxpHandle i h -> "SSH_FXP_HANDLE " ++ BC.unpack (Base16.encode h)
-  FxpData bs -> "SSH_FXP_DATA " ++ take 64 (show bs)
-  FxpName i filenames m -> "SSH_FXP_NAME " ++ show (map fst filenames) ++ show (map snd filenames)
-  FxpAttrs i bs -> "SSH_FXP_ATTRS " ++ show bs
+  FxpHandle i h -> BC.unpack (Base16.encode h)
+  FxpData i bs -> take 64 (show bs)
+  FxpName i filenames m -> show (map fst filenames) ++ show (map snd filenames)
+  FxpAttrs i bs -> show bs
 
-  FxpExtended bs -> "SSH_FXP_EXTENDED " ++ take 64 (show bs)
-  FxpExtendedReply bs -> "SSH_FXP_EXTENDED_REPLY " ++ take 64 (show bs)
-  Unknown bs -> take 64 $ show bs
+  FxpExtended i bs -> take 64 (show bs)
+  FxpExtendedReply i bs -> take 64 (show bs)
+  Unknown i bs -> take 64 (show bs)
+
+short p = case p of
+  FxpInit version -> "SSH_FXP_INIT()"
+  FxpVersion version ps -> "SSH_FXP_VERSION()"
+  FxpOpen i filename flags attrs -> "SSH_FXP_OPEN(" ++ show (unRequestId i) ++ ")"
+  FxpClose i h -> "SSH_FXP_CLOSE(" ++ show (unRequestId i) ++ ")"
+  FxpRead i bs -> "SSH_FXP_READ(" ++ show (unRequestId i) ++ ")"
+  FxpWrite i h offset bs -> "SSH_FXP_WRITE(" ++ show (unRequestId i) ++ ")"
+  FxpLStat i path -> "SSH_FXP_LSTAT(" ++ show (unRequestId i) ++ ")"
+  FxpFStat i bs -> "SSH_FXP_FSTAT(" ++ show (unRequestId i) ++ ")"
+  FxpSetStat i path bs -> "SSH_FXP_SETSTAT(" ++ show (unRequestId i) ++ ")"
+  FxpFSetStat i h bs -> "SSH_FXP_FSETSTAT(" ++ show (unRequestId i) ++ ")"
+  FxpOpenDir i dirname -> "SSH_FXP_OPENDIR(" ++ show (unRequestId i) ++ ")"
+  FxpReadDir i bs -> "SSH_FXP_READDIR(" ++ show (unRequestId i) ++ ")"
+  FxpRemove i bs -> "SSH_FXP_REMOVE(" ++ show (unRequestId i) ++ ")"
+  FxpMkDir i dirname bs -> "SSH_FXP_MKDIR(" ++ show (unRequestId i) ++ ")"
+  FxpRmDir i bs -> "SSH_FXP_RMDIR(" ++ show (unRequestId i) ++ ")"
+  FxpRealPath i path m -> "SSH_FXP_REALPATH(" ++ show (unRequestId i) ++ ")"
+  FxpStat i path -> "SSH_FXP_STAT(" ++ show (unRequestId i) ++ ")"
+  FxpRename i bs -> "SSH_FXP_RENAME(" ++ show (unRequestId i) ++ ")"
+  FxpReadLink i bs -> "SSH_FXP_READLINK(" ++ show (unRequestId i) ++ ")"
+
+  FxpLink i bs -> "SSH_FXP_LINK(" ++ show (unRequestId i) ++ ")"
+  FxpBlock i bs -> "SSH_FXP_BLOCK(" ++ show (unRequestId i) ++ ")"
+  FxpUnblock i bs -> "SSH_FXP_UNBLOCK(" ++ show (unRequestId i) ++ ")"
+
+  FxpStatus i code msg tag bs -> "SSH_FXP_STATUS(" ++ show (unRequestId i) ++ ")"
+  FxpHandle i h -> "SSH_FXP_HANDLE(" ++ show (unRequestId i) ++ ")"
+  FxpData i bs -> "SSH_FXP_DATA(" ++ show (unRequestId i) ++ ")"
+  FxpName i filenames m -> "SSH_FXP_NAME(" ++ show (unRequestId i) ++ ")"
+  FxpAttrs i bs -> "SSH_FXP_ATTRS(" ++ show (unRequestId i) ++ ")"
+
+  FxpExtended i bs -> "SSH_FXP_EXTENDED(" ++ show (unRequestId i) ++ ")"
+  FxpExtendedReply i bs -> "SSH_FXP_EXTENDED_REPLY(" ++ show (unRequestId i) ++ ")"
+  Unknown i bs -> "UNKNOWN_PACKET_TYPE(" ++ show (unRequestId i) ++ ")"
 
 ----------------------------------------------------------------------
 -- Main parsers
@@ -184,6 +236,9 @@ packet = do
     18 -> fxpRename n
     19 -> fxpReadLink n
 
+    -- 20 -> fxpSymLink n -- In protocol 3 and 4
+
+    -- Those three are not in protocol 3, nor in 4
     21 -> fxpLink n
     22 -> fxpBlock n
     23 -> fxpUnblock n
@@ -197,8 +252,9 @@ packet = do
     200 -> fxpExtended n
     201 -> fxpExtendedReply n
     _ -> do
-      bs <- AB.take n
-      return $ Unknown bs
+      i <- requestId
+      bs <- AB.take (n - 4)
+      return $ Unknown i bs
 
 fxpInit :: Int -> Parser Packet
 fxpInit n = do
@@ -230,7 +286,7 @@ fxpClose n = do
   return $ FxpClose i s
 
 fxpRead :: Int -> Parser Packet
-fxpRead n = FxpRead <$> AB.take n
+fxpRead n = FxpRead <$> requestId <*> AB.take (n - 4)
 
 fxpWrite :: Int -> Parser Packet
 fxpWrite n = do
@@ -248,7 +304,7 @@ fxpLStat n = do
   return $ FxpLStat i (T.decodeUtf8 path)
 
 fxpFStat :: Int -> Parser Packet
-fxpFStat n = FxpFStat <$> AB.take n
+fxpFStat n = FxpFStat <$> requestId <*> AB.take (n - 4)
 
 fxpSetStat :: Int -> Parser Packet
 fxpSetStat n = do
@@ -273,10 +329,10 @@ fxpOpenDir n = do
   return $ FxpOpenDir i (T.decodeUtf8 dirname)
 
 fxpReadDir :: Int -> Parser Packet
-fxpReadDir n = FxpReadDir <$> AB.take n
+fxpReadDir n = FxpReadDir <$> requestId <*> AB.take (n - 4)
 
 fxpRemove :: Int -> Parser Packet
-fxpRemove n = FxpRemove <$> AB.take n
+fxpRemove n = FxpRemove <$> requestId <*> AB.take (n - 4)
 
 fxpMkDir :: Int -> Parser Packet
 fxpMkDir n = do
@@ -287,7 +343,7 @@ fxpMkDir n = do
   return $ FxpMkDir i (T.decodeUtf8 dirname) attrs
 
 fxpRmDir :: Int -> Parser Packet
-fxpRmDir n = FxpRmDir <$> AB.take n
+fxpRmDir n = FxpRmDir <$> requestId <*> AB.take (n - 4)
 
 fxpRealPath :: Int -> Parser Packet
 fxpRealPath n = do
@@ -309,19 +365,19 @@ fxpStat n = do
   return $ FxpStat i (T.decodeUtf8 path)
 
 fxpRename :: Int -> Parser Packet
-fxpRename n = FxpRename <$> AB.take n
+fxpRename n = FxpRename <$> requestId <*> AB.take (n - 4)
 
 fxpReadLink :: Int -> Parser Packet
-fxpReadLink n = FxpReadLink <$> AB.take n
+fxpReadLink n = FxpReadLink <$> requestId <*> AB.take (n - 4)
                  
 fxpLink :: Int -> Parser Packet
-fxpLink n = FxpLink <$> AB.take n
+fxpLink n = FxpLink <$> requestId <*> AB.take (n - 4)
 
 fxpBlock :: Int -> Parser Packet
-fxpBlock n = FxpBlock <$> AB.take n
+fxpBlock n = FxpBlock <$> requestId <*> AB.take (n - 4)
 
 fxpUnblock :: Int -> Parser Packet
-fxpUnblock n = FxpUnblock <$> AB.take n
+fxpUnblock n = FxpUnblock <$> requestId <*> AB.take (n - 4)
                  
 fxpStatus :: Int -> Parser Packet
 fxpStatus n = do
@@ -341,7 +397,7 @@ fxpHandle n = do
   return $ FxpHandle i h
 
 fxpData :: Int -> Parser Packet
-fxpData n = FxpData <$> AB.take n
+fxpData n = FxpData <$> requestId <*> AB.take (n - 4)
 
 fxpName :: Int -> Parser Packet
 fxpName n = do
@@ -369,10 +425,10 @@ fxpAttrs n = do
     return $ FxpAttrs i attrs
                   
 fxpExtended :: Int -> Parser Packet
-fxpExtended n = FxpExtended <$> AB.take n
+fxpExtended n = FxpExtended <$> requestId <*> AB.take (n - 4)
 
 fxpExtendedReply :: Int -> Parser Packet
-fxpExtendedReply n = FxpExtendedReply <$> AB.take n
+fxpExtendedReply n = FxpExtendedReply <$> requestId <*> AB.take (n - 4)
 
 -- Protocol 3.
 readAttrs :: Parser Attrs
@@ -447,8 +503,8 @@ requestId = RequestId <$> word32BE
 -- Data types
 ----------------------------------------------------------------------
 
-newtype RequestId = RequestId Word32
-  deriving Show
+newtype RequestId = RequestId { unRequestId :: Word32 }
+  deriving (Eq, Show)
 
 data Packet =
     FxpInit Word32
@@ -462,40 +518,40 @@ data Packet =
   | FxpClose RequestId ByteString -- TODO Use a newtype wrapper.
   -- ^ Close a handle (either from a file or a directory). Response is
   -- FxpStatus.
-  | FxpRead ByteString
+  | FxpRead RequestId ByteString
   | FxpWrite RequestId ByteString Word64 ByteString
   | FxpLStat RequestId Text
-  | FxpFStat ByteString
+  | FxpFStat RequestId ByteString
   | FxpSetStat RequestId Text Attrs
   | FxpFSetStat RequestId ByteString Attrs
   | FxpOpenDir RequestId Text
   -- ^ dirname. A handle returned by FxpOpenDir is required to enumerate a
   -- directory.
-  | FxpReadDir ByteString
-  | FxpRemove ByteString
+  | FxpReadDir RequestId ByteString
+  | FxpRemove RequestId ByteString
   | FxpMkDir RequestId Text Attrs
-  | FxpRmDir ByteString
+  | FxpRmDir RequestId ByteString
   | FxpRealPath RequestId Text (Maybe (Word8, [Text]))
   -- original-path, optional control-byte, compose-path.
   | FxpStat RequestId Text
-  | FxpRename ByteString
-  | FxpReadLink ByteString
+  | FxpRename RequestId ByteString
+  | FxpReadLink RequestId ByteString
 
-  | FxpLink ByteString
-  | FxpBlock ByteString
-  | FxpUnblock ByteString
+  | FxpLink RequestId ByteString
+  | FxpBlock RequestId ByteString
+  | FxpUnblock RequestId ByteString
 
   | FxpStatus RequestId Word32 Text Text ByteString
   -- ^ code, message, language tag, data.
   | FxpHandle RequestId ByteString
   -- ^ Return a handle (an opaque string) to identify an open file or directory.
-  | FxpData ByteString
+  | FxpData RequestId ByteString
   | FxpName RequestId [(Text, Attrs)] (Maybe Bool)
   | FxpAttrs RequestId Attrs
 
-  | FxpExtended ByteString
-  | FxpExtendedReply ByteString
-  | Unknown ByteString
+  | FxpExtended RequestId ByteString
+  | FxpExtendedReply RequestId ByteString
+  | Unknown RequestId ByteString
   deriving Show
 
 data Attrs = Attrs
@@ -506,6 +562,41 @@ data Attrs = Attrs
   , attrsExtended :: [(ByteString, ByteString)]
   }
   deriving Show
+
+packetId p = case p of
+  FxpInit version -> Nothing
+  FxpVersion version ps -> Nothing
+  FxpOpen i filename flags attrs -> Just i
+  FxpClose i h -> Just i
+  FxpRead i bs -> Just i
+  FxpWrite i h offset bs -> Just i
+  FxpLStat i path -> Just i
+  FxpFStat i bs -> Just i
+  FxpSetStat i path bs -> Just i
+  FxpFSetStat i h bs -> Just i
+  FxpOpenDir i dirname -> Just i
+  FxpReadDir i bs -> Just i
+  FxpRemove i bs -> Just i
+  FxpMkDir i dirname bs -> Just i
+  FxpRmDir i bs -> Just i
+  FxpRealPath i path m -> Just i
+  FxpStat i path -> Just i
+  FxpRename i bs -> Just i
+  FxpReadLink i bs -> Just i
+
+  FxpLink i bs -> Just i
+  FxpBlock i bs -> Just i
+  FxpUnblock i bs -> Just i
+
+  FxpStatus i code msg tag bs -> Just i
+  FxpHandle i h -> Just i
+  FxpData i bs -> Just i
+  FxpName i filenames m -> Just i
+  FxpAttrs i bs -> Just i
+
+  FxpExtended i bs -> Just i
+  FxpExtendedReply i bs -> Just i
+  Unknown i bs -> Just i
 
 ----------------------------------------------------------------------
 -- Constants and flags
