@@ -46,7 +46,6 @@ main = do
   hSetBuffering stdout NoBuffering
   hSetBuffering stderr NoBuffering
   args <- getArgs
-  debug $ show args
 
   (sftpInp, sftpOut, sftpErr, _) <-
     runInteractiveProcess "/usr/lib/openssh/sftp-server-original"
@@ -66,6 +65,7 @@ main = do
   ps <- execWriterT (protocol is2)
   ps' <- takeMVar mvar
   S.withFileAsOutput "/home/sftp/debug.txt" $ \os -> do
+    S.write (Just . BC.pack $ show args ++ "\n") os
     mapM_ (\(s, p) -> S.write (Just . BC.pack $ s ++ display p ++ "\n") os) $ merge ps' ps
   return ()
   -- takeMVar inThread
@@ -141,14 +141,14 @@ description p = case p of
   FxpVersion version ps -> show ps
   FxpOpen i filename flags attrs -> T.unpack filename ++ " " ++ take 64 (show attrs)
   FxpClose i h -> BC.unpack (Base16.encode h)
-  FxpRead i bs -> take 64 (show bs)
+  FxpRead i h offset len -> BC.unpack (Base16.encode h) ++ " " ++ show offset ++ " " ++ show len
   FxpWrite i h offset bs -> BC.unpack (Base16.encode h) ++ " " ++ show offset ++ "\n" ++ take 64 (show bs)
   FxpLStat i path -> T.unpack path
   FxpFStat i bs -> take 64 (show bs)
   FxpSetStat i path bs -> T.unpack path
   FxpFSetStat i h bs -> BC.unpack (Base16.encode h)
   FxpOpenDir i dirname -> T.unpack dirname
-  FxpReadDir i bs -> take 64 (show bs)
+  FxpReadDir i h -> BC.unpack (Base16.encode h)
   FxpRemove i bs -> take 64 (show bs)
   FxpMkDir i dirname bs -> T.unpack dirname
   FxpRmDir i bs -> take 64 (show bs)
@@ -164,8 +164,9 @@ description p = case p of
   FxpStatus i code msg tag bs -> show code ++ " " ++ T.unpack msg ++ " " ++ take 64 (show bs)
   -- Handles are opaque strings; we choose to display them in hex.
   FxpHandle i h -> BC.unpack (Base16.encode h)
-  FxpData i bs -> take 64 (show bs)
-  FxpName i filenames m -> show (map fst filenames) ++ show (map snd filenames)
+  FxpData i bs -> show (BC.length bs) ++ " bytes " ++ take 64 (show bs)
+  FxpName i filenames m -> concatMap f filenames
+    where f (p, a) = "\n  " ++ T.unpack p ++ ": " ++ show a
   FxpAttrs i bs -> show bs
 
   FxpExtended i bs -> take 64 (show bs)
@@ -177,14 +178,14 @@ short p = case p of
   FxpVersion version ps -> "SSH_FXP_VERSION()"
   FxpOpen i filename flags attrs -> "SSH_FXP_OPEN(" ++ show (unRequestId i) ++ ")"
   FxpClose i h -> "SSH_FXP_CLOSE(" ++ show (unRequestId i) ++ ")"
-  FxpRead i bs -> "SSH_FXP_READ(" ++ show (unRequestId i) ++ ")"
+  FxpRead i h offset len -> "SSH_FXP_READ(" ++ show (unRequestId i) ++ ")"
   FxpWrite i h offset bs -> "SSH_FXP_WRITE(" ++ show (unRequestId i) ++ ")"
   FxpLStat i path -> "SSH_FXP_LSTAT(" ++ show (unRequestId i) ++ ")"
   FxpFStat i bs -> "SSH_FXP_FSTAT(" ++ show (unRequestId i) ++ ")"
   FxpSetStat i path bs -> "SSH_FXP_SETSTAT(" ++ show (unRequestId i) ++ ")"
   FxpFSetStat i h bs -> "SSH_FXP_FSETSTAT(" ++ show (unRequestId i) ++ ")"
   FxpOpenDir i dirname -> "SSH_FXP_OPENDIR(" ++ show (unRequestId i) ++ ")"
-  FxpReadDir i bs -> "SSH_FXP_READDIR(" ++ show (unRequestId i) ++ ")"
+  FxpReadDir i h -> "SSH_FXP_READDIR(" ++ show (unRequestId i) ++ ")"
   FxpRemove i bs -> "SSH_FXP_REMOVE(" ++ show (unRequestId i) ++ ")"
   FxpMkDir i dirname bs -> "SSH_FXP_MKDIR(" ++ show (unRequestId i) ++ ")"
   FxpRmDir i bs -> "SSH_FXP_RMDIR(" ++ show (unRequestId i) ++ ")"
@@ -286,7 +287,13 @@ fxpClose n = do
   return $ FxpClose i s
 
 fxpRead :: Int -> Parser Packet
-fxpRead n = FxpRead <$> requestId <*> AB.take (n - 4)
+fxpRead n = do
+  i <- requestId
+  h <- str $ n - 4
+  when (n - 4 - 4 - BC.length h - 8 - 4 /= 0) $ fail "Invalid read size."
+  offset <- word64BE
+  len <- word32BE
+  return $ FxpRead i h offset len
 
 fxpWrite :: Int -> Parser Packet
 fxpWrite n = do
@@ -294,7 +301,7 @@ fxpWrite n = do
   h <- str $ n - 4
   offset <- word64BE
   bs <- str $ n - 4 - 4 - BC.length h - 8
-  when (n - 4 -4 - BC.length h - 8 - 4 - BC.length bs /= 0) $ fail "Invalid write size."
+  when (n - 4 - 4 - BC.length h - 8 - 4 - BC.length bs /= 0) $ fail "Invalid write size."
   return $ FxpWrite i h offset bs
 
 fxpLStat :: Int -> Parser Packet
@@ -329,7 +336,7 @@ fxpOpenDir n = do
   return $ FxpOpenDir i (T.decodeUtf8 dirname)
 
 fxpReadDir :: Int -> Parser Packet
-fxpReadDir n = FxpReadDir <$> requestId <*> AB.take (n - 4)
+fxpReadDir n = FxpReadDir <$> requestId <*> str (n - 4)
 
 fxpRemove :: Int -> Parser Packet
 fxpRemove n = FxpRemove <$> requestId <*> AB.take (n - 4)
@@ -397,7 +404,11 @@ fxpHandle n = do
   return $ FxpHandle i h
 
 fxpData :: Int -> Parser Packet
-fxpData n = FxpData <$> requestId <*> AB.take (n - 4)
+fxpData n = do
+  i <- requestId
+  bs <- str $ n - 4
+  when (n - 4 - 4 - BC.length bs /= 0) $ fail "Invalid data size."
+  return $ FxpData i bs
 
 fxpName :: Int -> Parser Packet
 fxpName n = do
@@ -407,10 +418,10 @@ fxpName n = do
     c <- fromIntegral <$> word32BE
     filenames <- count c $ do
       s <- str'
-      _ <- str' -- longname, in protocol 3, not 6.
+      _ <- str' -- longname, in protocol 3, not 6. -- TODO Add in data type.
       attrs <- readAttrs
       return $ (T.decodeUtf8 s, attrs)
-    m <- option Nothing (Just . (/= 0) <$> anyWord8)
+    m <- option Nothing (Just . (/= 0) <$> anyWord8) -- Not in protocol 3.
     endOfInput
     return $ FxpName i filenames m
 --  return $ FxpName (RequestId 0) [] Nothing
@@ -518,7 +529,8 @@ data Packet =
   | FxpClose RequestId ByteString -- TODO Use a newtype wrapper.
   -- ^ Close a handle (either from a file or a directory). Response is
   -- FxpStatus.
-  | FxpRead RequestId ByteString
+  | FxpRead RequestId ByteString Word64 Word32
+  -- ^ handle, offset, length.
   | FxpWrite RequestId ByteString Word64 ByteString
   | FxpLStat RequestId Text
   | FxpFStat RequestId ByteString
@@ -528,6 +540,7 @@ data Packet =
   -- ^ dirname. A handle returned by FxpOpenDir is required to enumerate a
   -- directory.
   | FxpReadDir RequestId ByteString
+  -- ^ handle.
   | FxpRemove RequestId ByteString
   | FxpMkDir RequestId Text Attrs
   | FxpRmDir RequestId ByteString
@@ -568,14 +581,14 @@ packetId p = case p of
   FxpVersion version ps -> Nothing
   FxpOpen i filename flags attrs -> Just i
   FxpClose i h -> Just i
-  FxpRead i bs -> Just i
+  FxpRead i h offset len -> Just i
   FxpWrite i h offset bs -> Just i
   FxpLStat i path -> Just i
   FxpFStat i bs -> Just i
   FxpSetStat i path bs -> Just i
   FxpFSetStat i h bs -> Just i
   FxpOpenDir i dirname -> Just i
-  FxpReadDir i bs -> Just i
+  FxpReadDir i h -> Just i
   FxpRemove i bs -> Just i
   FxpMkDir i dirname bs -> Just i
   FxpRmDir i bs -> Just i
