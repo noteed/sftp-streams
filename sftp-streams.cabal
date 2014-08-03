@@ -1,5 +1,5 @@
 name:                sftp-streams
-version:             0.0.1
+version:             0.0.2
 Cabal-Version:       >= 1.8
 synopsis:            An SFTP implementation.
 description:         An SFTP implementation.
@@ -19,6 +19,17 @@ flag sftp-debug
   description: Add debug output that are visible client-side. TODO Confirm.
   default: False
 
+library
+  build-depends:       attoparsec == 0.10.*,
+                       base == 4.*,
+                       base16-bytestring == 0.1.*,
+                       bytestring == 0.9.*,
+                       io-streams == 1.1.*,
+                       text == 0.11.*,
+                       transformers == 0.3.*
+  exposed-modules:     Network.SFTP.Messages
+  ghc-options:         -Wall
+
 executable sftp-mitm
   hs-source-dirs:      bin
   main-is:             sftp-mitm.hs
@@ -28,6 +39,7 @@ executable sftp-mitm
                        bytestring == 0.9.*,
                        io-streams == 1.1.*,
                        process == 1.1.*,
+                       sftp-streams,
                        text == 0.11.*,
                        transformers == 0.3.*
   ghc-options:         -Wall
