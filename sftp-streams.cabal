@@ -43,3 +43,18 @@ executable sftp-mitm
                        text == 0.11.*,
                        transformers == 0.3.*
   ghc-options:         -Wall
+
+executable sftp-read
+  hs-source-dirs:      bin
+  main-is:             sftp-read.hs
+  build-depends:       attoparsec == 0.10.*,
+                       base == 4.*,
+                       base16-bytestring == 0.1.*,
+                       bytestring == 0.9.*,
+                       cereal == 0.3.*,
+                       io-streams == 1.1.*,
+                       process == 1.1.*,
+                       sftp-streams,
+                       text == 0.11.*,
+                       transformers == 0.3.*
+  ghc-options:         -Wall
