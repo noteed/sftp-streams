@@ -67,7 +67,7 @@ main = do
   ps <- execWriterT (protocol is2)
   ps' <- takeMVar mvar
   S.withFileAsOutput "/home/sftp/debug.txt" $ \os -> do
-    S.write (Just . BC.pack $ show args ++ "\n") os
+    S.write (Just . BC.pack $ "Arguments: " ++ show args ++ "\n") os
     mapM_ (\(s, p) -> S.write (Just . BC.pack $ s ++ display p ++ "\n") os) $ merge ps' ps
   return ()
   -- takeMVar inThread

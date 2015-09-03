@@ -49,13 +49,13 @@ start st is os es = do
       send os $ FxpVersion 3 []
       interpret st is os es
     -- TODO Probably answer with FxpStatus.
-    _ -> error "Unsupported first messaged"
+    _ -> error "Unsupported first message"
 
 interpret st@FS{..} is os es = do
   p <- S.parseFromStream packet is
   case p of
     FxpRealPath i "." Nothing -> do
-      send os $ FxpName i [fsHomeDirectory] Nothing
+      send os $ FxpName i [dirFxpName fsHomeDirectory] Nothing
       interpret st is os es
 
     FxpOpenDir i dirname -> do
@@ -64,9 +64,11 @@ interpret st@FS{..} is os es = do
 
     FxpReadDir i "0" | fsReadingDir == Nothing -> do
       send os $ FxpName i
-        [ (".", defaultAttrs)
-        , ("..", defaultAttrs)
-        ] Nothing
+        ([ (".", defaultAttrs)
+         , ("..", defaultAttrs)
+         ] ++
+         map dirFxpName (dirEntries fsHomeDirectory)
+        ) Nothing
       interpret st { fsReadingDir = Just "0" } is os es
 
     FxpReadDir i "0" -> do
@@ -80,14 +82,34 @@ interpret st@FS{..} is os es = do
     _ -> error "Unsupported message"
 
 data FS = FS
-  { fsHomeDirectory :: (Text, Attrs)
+  { fsHomeDirectory :: Directory
   , fsReadingDir :: Maybe ByteString
   -- ^ Keep track of an existing FxpReadDir.
   }
 
+data Directory = Directory
+  { dirName :: Text
+  , dirAttrs :: Attrs
+  , dirEntries :: [Directory]
+  }
+
+dirFxpName d = (dirName d, dirAttrs d)
+
 initialState = FS
-  { fsHomeDirectory = ("/home/sftp", defaultAttrs)
+  { fsHomeDirectory = Directory "/home/sftp" defaultAttrs [somedir]
   , fsReadingDir = Nothing
+  }
+
+somedir = Directory "somedir"
+  (Attrs (Just 4096) (Just (1000, 1000)) (Just 16893) (Just (1441313037, 1441313037)) [])
+  []
+
+defaultAttrs = Attrs
+  { attrsSize = Nothing
+  , attrsUidGid = Nothing
+  , attrsPermission = Nothing
+  , attrsAccessTime = Nothing
+  , attrsExtended = []
   }
 
 send :: S.OutputStream ByteString -> Packet -> IO ()
@@ -110,7 +132,7 @@ serialize p = case p of
             putWord32be . fromIntegral $ BC.length s'
             putByteString s'
             putWord32be 0 -- longname, not in protocol 6
-            putAttrs defaultAttrs
+            putAttrs a
             ) filenames
     putWord32be . fromIntegral $ BC.length payload
     putByteString payload
@@ -144,14 +166,6 @@ fxpStatus n = do
   tag <- str $ n - 8 - 4 - BC.length msg
   bs <- AB.take $ n - 8 - 8 - BC.length msg - BC.length tag
   return $ FxpStatus i code (T.decodeUtf8 msg) (T.decodeUtf8 tag) bs
-
-defaultAttrs = Attrs
-  { attrsSize = Nothing
-  , attrsUidGid = Nothing
-  , attrsPermission = Nothing
-  , attrsAccessTime = Nothing
-  , attrsExtended = []
-  }
 
 -- putAttrs :: Parser Attrs
 putAttrs Attrs{..} = do

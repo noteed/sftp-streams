@@ -451,7 +451,7 @@ data Packet =
   | FxpMkDir RequestId Text Attrs
   | FxpRmDir RequestId ByteString
   | FxpRealPath RequestId Text (Maybe (Word8, [Text]))
-  -- original-path, optional control-byte, compose-path.
+  -- ^ original-path, optional control-byte, compose-path.
   | FxpStat RequestId Text
   | FxpRename RequestId ByteString
   | FxpReadLink RequestId ByteString

@@ -1,6 +1,6 @@
 #! /bin/bash
 
-echo Running sftp-mitm in Docker container...
+echo Running sftp-mitm in a Docker container...
 SFTPD_ID=$(docker run -d sftp-mitm /usr/sbin/sshd -D)
 SFTPD_IP=$(docker inspect $SFTPD_ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
 
@@ -16,7 +16,10 @@ cd  /home/sftp/somedir
 mkdir bin
 put -r bin
 cd bin
+ls
 get sftp-mitm.hs delete-me.test-file
+cd /home/sftp
+ls
 EOF
 ssh sftp@$SFTPD_IP ls -la somedir/bin
 ssh sftp@$SFTPD_IP cat debug.txt
