@@ -27,7 +27,7 @@ http://tools.ietf.org/html/draft-ietf-secsh-filexfer-02 when I saw that my
 client was using protocol version 3.
 
 The version of `sftp` (i.e. the client) I used defaults to protocol version 3.
-I have not tried to protocol versios 1 and 2 (accessible with the `-1` and `-2`
+I have not tried protocol versions 1 and 2 (accessible with the `-1` and `-2`
 flags). 
 
 The client can re-use packet IDs very quickly (e.g. after 3 or 4 requests).
@@ -35,9 +35,9 @@ The client can re-use packet IDs very quickly (e.g. after 3 or 4 requests).
 `SSH_FXP_READ` packets request 32768 bytes at a time. I think I can use the
 `-B` flag to influence that size.
 
-If the server response includes less than that requested size, the client will
+If the server response includes less than the requested size, the client will
 issue a second request to try to get the "missing" bytes, but not again 32768
-bytes. It does so even if the preceding `SSH_FXP_STAT` request let it know the
+bytes. It does so even if the preceding `SSH_FXP_STAT` request lets it know the
 size of the file and thus that the file was complete.
 
 It is necessary to create a directory that you plan to transfer with `put -r`:
