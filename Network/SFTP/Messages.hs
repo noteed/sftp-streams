@@ -556,7 +556,7 @@ flagUntranslatedName = 0x00004000
 flagCTime = 0x00008000
 flagExtended = 0x80000000
 
-contains :: Bits a => a -> a -> Bool
+contains :: (Bits a, Num a) => a -> a -> Bool
 contains flags flag = flags .&. flag /= 0
 
 fxOk, fxEof, fxNoSuchFile, fxPermissionDenied, fxFailure, fxBadMessage,
