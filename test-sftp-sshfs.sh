@@ -15,6 +15,7 @@ sshfs sftp@$SFTPD_IP: sshfs
 sleep 2
 
 ls sshfs
+cat sshfs/hello.txt
 
 sleep 2
 

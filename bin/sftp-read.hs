@@ -19,6 +19,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString.Base16 as Base16
 import qualified Data.ByteString.Char8 as BC
 import Data.List (partition)
+import Data.Maybe (mapMaybe)
 import Data.Serialize.Put
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -55,7 +56,19 @@ interpret st@FS{..} is os es = do
   p <- S.parseFromStream packet is
   case p of
     FxpRealPath i "." Nothing -> do
-      send os $ FxpName i [dirFxpName fsHomeDirectory] Nothing
+      send os $ FxpName i [dirFxpName (Left fsHomeDirectory)] Nothing
+      interpret st is os es
+
+    FxpOpen i filename _ _ | filename `elem` fileNames fsHomeDirectory -> do
+      send os $ FxpHandle i "0"
+      interpret st is os es
+
+    FxpOpen i _ _ _ -> do
+      send os $ FxpStatus i fxNoSuchFile "No such file" "" ""
+      interpret st is os es
+
+    FxpRead i "0" offset len -> do
+      send os $ FxpData i "hello" -- TODO File content
       interpret st is os es
 
     FxpOpenDir i dirname -> do
@@ -83,6 +96,10 @@ interpret st@FS{..} is os es = do
       send os $ FxpAttrs i (dirAttrs fsHomeDirectory)
       interpret st is os es
 
+    FxpLStat i name | Just File{..} <- getFile name fsHomeDirectory -> do
+      send os $ FxpAttrs i fileAttrs
+      interpret st is os es
+
     FxpLStat i _ -> do
       send os $ FxpStatus i fxNoSuchFile "No such file" "" ""
       interpret st is os es
@@ -99,19 +116,43 @@ data FS = FS
   -- ^ Keep track of an existing FxpReadDir.
   }
 
-data Directory = Directory
+data Directory =
+  Directory
   { dirName :: Text
   , dirAttrs :: Attrs
-  , dirEntries :: [Directory]
+  , dirEntries :: [Either Directory File]
   }
 
-dirFxpName d = (dirName d, dirAttrs d)
+data File =
+  File
+  { fileName :: Text
+  , fileAttrs :: Attrs
+  , fileContent :: ByteString
+  }
+
+dirFxpName (Left Directory{..}) = (dirName, dirAttrs)
+dirFxpName (Right File{..}) = (fileName, fileAttrs)
+
+fileNames = mapMaybe f . dirEntries
+  where f (Right File{..}) = Just fileName
+        f _ = Nothing
+
+getFile name Directory{..} = case filter f dirEntries of
+  [Right x] -> Just x
+  _ -> Nothing
+  where f (Right File{..}) = fileName == name
+        f _ = False
 
 initialState = FS
   { fsHomeDirectory = Directory "/home/sftp"
     (Attrs (Just 4096) (Just (1000, 1000)) (Just 16893)
      (Just (1441313037, 1441313037)) [])
-    [somedir]
+    [ Left somedir
+    , Right (File "hello.txt"
+        (Attrs (Just . fromIntegral $ BC.length "hello") (Just (1000, 1000)) (Just 33188)
+         (Just (1441313037, 1441313037)) [])
+        "hello")
+    ]
   , fsReadingDir = Nothing
   }
 
@@ -181,6 +222,20 @@ serialize p = case p of
           putAttrs a
     putWord32be . fromIntegral $ BC.length payload
     putByteString payload
+
+  FxpData i bs -> do
+    putWord32be . fromIntegral $
+      1 + 4 + 4 + BC.length bs -- size
+    putWord8 103 -- type
+    putWord32be . fromIntegral $ unRequestId i
+    putWord32be . fromIntegral $ BC.length bs
+    putByteString bs
+
+fxpData n = do
+  i <- requestId
+  bs <- str $ n - 4
+  when (n - 4 - 4 - BC.length bs /= 0) $ fail "Invalid data size."
+  return $ FxpData i bs
 
 fxpStatus :: Int -> Parser Packet
 fxpStatus n = do
