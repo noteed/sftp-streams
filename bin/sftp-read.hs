@@ -77,9 +77,21 @@ interpret st@FS{..} is os es = do
 
     FxpClose i "0" -> do
       send os $ FxpStatus i fxOk "Success" "" ""
+      interpret st is os es
+
+    FxpLStat i "." -> do
+      send os $ FxpAttrs i (dirAttrs fsHomeDirectory)
+      interpret st is os es
+
+    FxpLStat i _ -> do
+      send os $ FxpStatus i fxNoSuchFile "No such file" "" ""
+      interpret st is os es
 
     -- TODO Probably answer with FxpStatus.
-    _ -> error "Unsupported message"
+    _ -> do
+      let Just i = packetId p
+      send os $ FxpStatus i fxOpUnsupported "Unsupported message" "" ""
+      interpret st is os es
 
 data FS = FS
   { fsHomeDirectory :: Directory
@@ -96,12 +108,16 @@ data Directory = Directory
 dirFxpName d = (dirName d, dirAttrs d)
 
 initialState = FS
-  { fsHomeDirectory = Directory "/home/sftp" defaultAttrs [somedir]
+  { fsHomeDirectory = Directory "/home/sftp"
+    (Attrs (Just 4096) (Just (1000, 1000)) (Just 16893)
+     (Just (1441313037, 1441313037)) [])
+    [somedir]
   , fsReadingDir = Nothing
   }
 
 somedir = Directory "somedir"
-  (Attrs (Just 4096) (Just (1000, 1000)) (Just 16893) (Just (1441313037, 1441313037)) [])
+  (Attrs (Just 4096) (Just (1000, 1000)) (Just 16893)
+   (Just (1441313037, 1441313037)) [])
   []
 
 defaultAttrs = Attrs
@@ -157,6 +173,14 @@ serialize p = case p of
     putWord32be . fromIntegral $ BC.length tag'
     putByteString tag'
     putByteString bs
+
+  FxpAttrs i a -> do
+    let payload = runPut $ do
+          putWord8 105 -- type
+          putWord32be . fromIntegral $ unRequestId i
+          putAttrs a
+    putWord32be . fromIntegral $ BC.length payload
+    putByteString payload
 
 fxpStatus :: Int -> Parser Packet
 fxpStatus n = do
