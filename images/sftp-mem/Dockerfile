@@ -23,5 +23,5 @@ RUN mkdir -p /home/sftp/.ssh
 ADD insecure_id_rsa.pub /home/sftp/.ssh/authorized_keys
 RUN chown -R sftp:sftp /home/sftp/.ssh
 
-ADD sftp-read /usr/lib/openssh/sftp-server-original
+ADD sftp-mem /usr/lib/openssh/sftp-server-original
 ADD sftp-mitm /usr/lib/openssh/sftp-server

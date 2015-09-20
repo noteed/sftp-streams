@@ -44,9 +44,9 @@ executable sftp-mitm
                        transformers
   ghc-options:         -Wall
 
-executable sftp-read
+executable sftp-mem
   hs-source-dirs:      bin
-  main-is:             sftp-read.hs
+  main-is:             sftp-mem.hs
   build-depends:       attoparsec,
                        base == 4.*,
                        base16-bytestring,

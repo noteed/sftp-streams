@@ -11,6 +11,10 @@ At this point, there is a simple executable `sftp-mitm` that can sit between
 The program parses the packets exchanged by a regular client and the real SFTP
 program on the server, and display them.
 
+There is also a simple executable `sftp-mem` that implements a few commands.
+Those commands are exercised in `test-sftp-sshfs.sh`: it uses SSHFS to talk to
+the executable which exposes a directory held in memory.
+
 ## Docker image
 
 Paths are hard-coded in the executable. There is a Dockerfile to create an

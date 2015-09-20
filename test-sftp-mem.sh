@@ -1,7 +1,7 @@
 #! /bin/bash
 
-echo Running sftp-mitm + sftp-read in a Docker container...
-SFTPD_ID=$(docker run -d sftp-read /usr/sbin/sshd -D)
+echo Running sftp-mitm + sftp-mem in a Docker container...
+SFTPD_ID=$(docker run -d sftp-mem /usr/sbin/sshd -D)
 SFTPD_IP=$(docker inspect $SFTPD_ID | grep IPAddress | awk '{ print $2 }' | tr -d ',"')
 
 # Increase chances sshd is ready.

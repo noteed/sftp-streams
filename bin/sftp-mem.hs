@@ -149,10 +149,9 @@ getFile name Directory{..} = case filter f dirEntries of
         f _ = False
 
 initialState = FS
-  { fsHomeDirectory = Directory "/home/sftp"
-    (Attrs (Just 4096) (Just (1000, 1000)) (Just 16893)
-     (Just (1441313037, 1441313037)) [])
-    [ Left somedir
+  { fsHomeDirectory = Directory "sftp"
+    someAttrs
+    [ Left someDir
     , Right (File "hello.txt"
         (Attrs (Just . fromIntegral $ BC.length "hello") (Just (1000, 1000)) (Just 33188)
          (Just (1441313037, 1441313037)) [])
@@ -161,9 +160,12 @@ initialState = FS
   , fsReadingDir = Nothing
   }
 
-somedir = Directory "somedir"
-  (Attrs (Just 4096) (Just (1000, 1000)) (Just 16893)
-   (Just (1441313037, 1441313037)) [])
+someAttrs =
+  Attrs (Just 4096) (Just (1000, 1000)) (Just 16893)
+   (Just (1441313037, 1441313037)) []
+
+someDir = Directory "somedir"
+  someAttrs
   []
 
 defaultAttrs = Attrs
