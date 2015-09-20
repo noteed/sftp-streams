@@ -71,6 +71,11 @@ interpret st@FS{..} is os es = do
       send os $ FxpData i "hello" -- TODO File content
       interpret st is os es
 
+    FxpWrite i "0" 0 bs -> do
+      -- TODO Actually "write" bs.
+      send os $ FxpStatus i fxOk "Success" "" ""
+      interpret st is os es
+
     FxpOpenDir i dirname -> do
       send os $ FxpHandle i "0"
       interpret st is os es

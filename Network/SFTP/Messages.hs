@@ -44,7 +44,7 @@ description p = case p of
   FxpOpen i filename flags attrs -> T.unpack filename ++ " " ++ take 64 (show attrs)
   FxpClose i h -> BC.unpack (Base16.encode h)
   FxpRead i h offset len -> BC.unpack (Base16.encode h) ++ " " ++ show offset ++ " " ++ show len
-  FxpWrite i h offset bs -> BC.unpack (Base16.encode h) ++ " " ++ show offset ++ "\n" ++ take 64 (show bs)
+  FxpWrite i h offset bs -> BC.unpack (Base16.encode h) ++ " " ++ show offset ++ " " ++ show (BC.length bs) ++ " bytes " ++ take 64 (show bs)
   FxpLStat i path -> T.unpack path
   FxpFStat i bs -> take 64 (show bs)
   FxpSetStat i path bs -> T.unpack path

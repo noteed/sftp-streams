@@ -16,10 +16,13 @@ sleep 2
 
 ls sshfs
 cat sshfs/hello.txt
+echo
+echo bye > sshfs/hello.txt
 
 sleep 2
 
 fusermount -u sshfs
 
+echo "-------------------"
 docker exec $SFTPD_ID cat /home/sftp/debug.txt
 docker kill $SFTPD_ID
