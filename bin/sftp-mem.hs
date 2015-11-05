@@ -26,6 +26,7 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T (decodeUtf8, encodeUtf8)
 import Data.Word (Word8, Word32, Word64)
 import System.Environment (getArgs)
+import System.FilePath (joinPath, splitDirectories)
 import System.IO (hClose, hFlush, hPutStrLn, hSetBuffering, stdin, stderr, stdout, BufferMode(..))
 import System.IO.Streams (InputStream, OutputStream)
 import qualified System.IO.Streams as S
@@ -56,19 +57,42 @@ interpret st@FS{..} is os es = do
   p <- S.parseFromStream packet is
   case p of
     FxpRealPath i "." Nothing -> do
-      send os $ FxpName i [dirFxpName (Left fsHomeDirectory)] Nothing
+      let cdir = currentDir st
+      send os $ FxpName i [entryFxpName (Left cdir)] Nothing
       interpret st is os es
 
-    FxpOpen i filename _ _ | filename `elem` fileNames fsHomeDirectory -> do
-      send os $ FxpHandle i "0"
+    FxpRealPath i name Nothing -> do
+      case map T.pack (splitDirectories (T.unpack name)) of
+        "/":rest -> case lookupDir' rest fsRootDirectory of
+          Just dir -> do
+            send os $ FxpName i [entryFxpName' ("/":rest) (Left dir)] Nothing
+            interpret st {fsCurrentDirectory = rest} is os es
+          Nothing -> do
+            send os $ FxpStatus i fxNoSuchFile "No such file" "" ""
+            interpret st is os es
+        _ -> do
+          send os $ FxpStatus i fxOpUnsupported "Unsupported relative path" "" ""
+          interpret st is os es
+
+    FxpOpen i path _ _ ->
+      case map T.pack (splitDirectories (T.unpack path)) of
+        "/":rest | length rest > 0 -> case lookupEntry' rest fsRootDirectory of
+          Just (Right _) -> do
+            send os $ FxpHandle i "0"
+            interpret st is os es
+          Nothing -> do
+            send os $ FxpStatus i fxNoSuchFile "No such file" "" ""
+            interpret st is os es
+        _ -> do
+          send os $ FxpStatus i fxNoSuchFile "No such file" "" ""
+          interpret st is os es
+
+    FxpRead i "0" 0 len | len > 6 -> do
+      send os $ FxpData i "hello" -- TODO File content, and bigger file
       interpret st is os es
 
-    FxpOpen i _ _ _ -> do
-      send os $ FxpStatus i fxNoSuchFile "No such file" "" ""
-      interpret st is os es
-
-    FxpRead i "0" offset len -> do
-      send os $ FxpData i "hello" -- TODO File content
+    FxpRead i "0" _ _ -> do
+      send os $ FxpStatus i fxEof "End of file" "" ""
       interpret st is os es
 
     FxpWrite i "0" 0 bs -> do
@@ -85,7 +109,7 @@ interpret st@FS{..} is os es = do
         ([ (".", defaultAttrs)
          , ("..", defaultAttrs)
          ] ++
-         map dirFxpName (dirEntries fsHomeDirectory)
+         map entryFxpName (dirEntries (currentDir st))
         ) Nothing
       interpret st { fsReadingDir = Just "0" } is os es
 
@@ -97,17 +121,11 @@ interpret st@FS{..} is os es = do
       send os $ FxpStatus i fxOk "Success" "" ""
       interpret st is os es
 
-    FxpLStat i "." -> do
-      send os $ FxpAttrs i (dirAttrs fsHomeDirectory)
-      interpret st is os es
+    FxpLStat i path ->
+      interpretStat st i path is os es
 
-    FxpLStat i name | Just File{..} <- getFile name fsHomeDirectory -> do
-      send os $ FxpAttrs i fileAttrs
-      interpret st is os es
-
-    FxpLStat i _ -> do
-      send os $ FxpStatus i fxNoSuchFile "No such file" "" ""
-      interpret st is os es
+    FxpStat i path -> do
+      interpretStat st i path is os es
 
     -- TODO Probably answer with FxpStatus.
     _ -> do
@@ -115,8 +133,30 @@ interpret st@FS{..} is os es = do
       send os $ FxpStatus i fxOpUnsupported "Unsupported message" "" ""
       interpret st is os es
 
+interpretStat st i "." is os es = do
+  send os $ FxpAttrs i (dirAttrs (currentDir st))
+  interpret st is os es
+interpretStat st@FS{..} i path is os es = do
+  case map T.pack (splitDirectories (T.unpack path)) of
+    "/":rest | length rest > 0 -> do
+      case lookupEntry' rest fsRootDirectory of
+        Just (Right File{..}) -> do
+          send os $ FxpAttrs i fileAttrs
+          interpret st is os es
+        Just (Left Directory{..}) -> do
+          send os $ FxpAttrs i dirAttrs
+          interpret st is os es
+        Nothing -> do
+          send os $ FxpStatus i fxNoSuchFile "No such file" "" ""
+          interpret st is os es
+    _ -> do
+      send os $ FxpStatus i fxOpUnsupported "Unsupported relative path" "" ""
+      interpret st is os es
+
 data FS = FS
-  { fsHomeDirectory :: Directory
+  { fsRootDirectory :: Directory
+  , fsCurrentDirectory :: [Text]
+  -- ^ List of directories. When empty, means root.
   , fsReadingDir :: Maybe ByteString
   -- ^ Keep track of an existing FxpReadDir.
   }
@@ -135,28 +175,64 @@ data File =
   , fileContent :: ByteString
   }
 
-dirFxpName (Left Directory{..}) = (dirName, dirAttrs)
-dirFxpName (Right File{..}) = (fileName, fileAttrs)
+entryFxpName (Left Directory{..}) = (dirName, dirAttrs)
+entryFxpName (Right File{..}) = (fileName, fileAttrs)
+
+entryFxpName' path (Left Directory{..}) =
+  (joinPath' path, dirAttrs)
+entryFxpName' path (Right File{..}) =
+  (joinPath' path, fileAttrs)
+
+joinPath' texts = T.pack (joinPath (map T.unpack texts))
 
 fileNames = mapMaybe f . dirEntries
   where f (Right File{..}) = Just fileName
         f _ = Nothing
 
-getFile name Directory{..} = case filter f dirEntries of
+lookupFile name Directory{..} = case filter f dirEntries of
   [Right x] -> Just x
   _ -> Nothing
   where f (Right File{..}) = fileName == name
         f _ = False
 
+currentDir :: FS -> Directory
+currentDir FS{..} = case lookupDir' fsCurrentDirectory fsRootDirectory of
+  Just d -> d
+  Nothing -> error "Mal-formed fsCurrentDirectory."
+
+lookupDir :: Text -> Directory -> Maybe Directory
+lookupDir name Directory{..} = case filter f dirEntries of
+  [Left x] -> Just x
+  _ -> Nothing
+  where f (Left Directory{..}) = dirName == name
+        f _ = False
+
+lookupDir' :: [Text] -> Directory -> Maybe Directory
+lookupDir' path dir = go path dir
+  where
+  go [] d = Just d
+  go (x:xs) d = case lookupDir x d of
+    Nothing -> Nothing
+    Just d' -> go xs d'
+
+lookupEntry name Directory{..} = case filter f dirEntries of
+  [Right x] -> Just (Right x)
+  [Left x] -> Just (Left x)
+  _ -> Nothing
+  where f (Right File{..}) = fileName == name
+        f (Left Directory{..}) = dirName == name
+        f _ = False
+
+lookupEntry' [] dir = error "lookupEntry' called with empty path"
+lookupEntry' path dir = lookupDir' (init path) dir >>= lookupEntry (last path)
+
 initialState = FS
-  { fsHomeDirectory = Directory "sftp"
+  { fsRootDirectory = Directory "/"
     someAttrs
     [ Left someDir
-    , Right (File "hello.txt"
-        (Attrs (Just . fromIntegral $ BC.length "hello") (Just (1000, 1000)) (Just 33188)
-         (Just (1441313037, 1441313037)) [])
-        "hello")
+    , Right hello
     ]
+  , fsCurrentDirectory = []
   , fsReadingDir = Nothing
   }
 
@@ -166,7 +242,13 @@ someAttrs =
 
 someDir = Directory "somedir"
   someAttrs
-  []
+  [ Right hello
+  ]
+
+hello = File "hello.txt"
+  (Attrs (Just . fromIntegral $ BC.length "hello") (Just (1000, 1000)) (Just 33188)
+  (Just (1441313037, 1441313037)) [])
+  "hello"
 
 defaultAttrs = Attrs
   { attrsSize = Nothing
@@ -253,7 +335,7 @@ fxpStatus n = do
   bs <- AB.take $ n - 8 - 8 - BC.length msg - BC.length tag
   return $ FxpStatus i code (T.decodeUtf8 msg) (T.decodeUtf8 tag) bs
 
--- putAttrs :: Parser Attrs
+putAttrs :: Attrs -> PutM ()
 putAttrs Attrs{..} = do
   let flags =
         maybe 0x00 (const flagSize) attrsSize .|.

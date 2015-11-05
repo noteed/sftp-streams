@@ -20,6 +20,7 @@ ls
 get sftp-mitm.hs delete-me.test-file
 cd /home/sftp
 ls
+cd blah
 EOF
 ssh sftp@$SFTPD_IP ls -la somedir/bin
 ssh sftp@$SFTPD_IP cat debug.txt

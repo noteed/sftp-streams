@@ -52,6 +52,7 @@ executable sftp-mem
                        base16-bytestring,
                        bytestring,
                        cereal,
+                       filepath,
                        io-streams,
                        process,
                        sftp-streams,
