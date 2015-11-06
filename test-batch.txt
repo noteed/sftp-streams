@@ -11,3 +11,13 @@ ls nonexisting
 ls nonexisting/
 ls nonexisting/text.txt
 ls empty/text.txt
+cd empty
+ls
+cd ..
+ls
+cd tests/
+ls
+get test-00.txt
+get ../README.md
+cd ..
+get hello.txt

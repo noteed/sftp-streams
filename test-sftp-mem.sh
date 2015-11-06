@@ -8,8 +8,13 @@ SFTPD_IP=$(docker inspect $SFTPD_ID | grep IPAddress | awk '{ print $2 }' | tr -
 # TODO Maybe poll until the banner is accessible ?
 sleep 1
 
+# Avoid downloading files in the current directory.
+STARTDIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+TEMPDIR=$(mktemp -d)
+cd $TEMPDIR
+
 echo Running sftp...
-sftp sftp@$SFTPD_IP < test-batch.txt
+sftp sftp@$SFTPD_IP < $STARTDIR/test-batch.txt
 ssh sftp@$SFTPD_IP cat debug.txt
 
 echo Killing container...
