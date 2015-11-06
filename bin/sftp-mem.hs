@@ -63,8 +63,8 @@ interpret st@ST{..} is os es = do
       send os $ FxpName i [entryFxpName (Left cdir)] Nothing
       interpret st is os es
 
-    FxpRealPath i name Nothing -> do
-      case map T.pack (splitDirectories (T.unpack name)) of
+    FxpRealPath i path Nothing -> do
+      case splitPath path of
         "/":rest -> case lookupDir' rest stRootDirectory of
           Just dir -> do
             send os $ FxpName i [entryFxpName' ("/":rest) (Left dir)] Nothing
@@ -77,7 +77,7 @@ interpret st@ST{..} is os es = do
           interpret st is os es
 
     FxpOpen i path _ _ ->
-      case map T.pack (splitDirectories (T.unpack path)) of
+      case splitPath path of
         "/":rest | length rest > 0 -> case lookupEntry' stRootDirectory rest of
           Just (Right _) -> do
             let (st', h) = newHandle ("/":rest) st
@@ -109,7 +109,7 @@ interpret st@ST{..} is os es = do
       interpret st is os es
 
     FxpOpenDir i path -> do
-      let (st', h) = newHandle (map T.pack (splitDirectories (T.unpack path))) st
+      let (st', h) = newHandle (splitPath path) st
       send os $ FxpHandle i h
       interpret st' is os es
 
@@ -152,7 +152,7 @@ interpretStat st i "." is os es = do
   send os $ FxpAttrs i (dirAttrs (currentDir st))
   interpret st is os es
 interpretStat st@ST{..} i path is os es = do
-  case map T.pack (splitDirectories (T.unpack path)) of
+  case splitPath path of
     "/":rest | length rest > 0 -> do
       case lookupEntry' stRootDirectory rest of
         Just (Right File{..}) -> do
@@ -212,6 +212,9 @@ entryFxpName' path (Left Directory{..}) =
   (joinPath' path, dirAttrs)
 entryFxpName' path (Right File{..}) =
   (joinPath' path, fileAttrs)
+
+splitPath path = filter (/= ".")
+  (map T.pack (splitDirectories (T.unpack path)))
 
 joinPath' texts = T.pack (joinPath (map T.unpack texts))
 

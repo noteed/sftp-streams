@@ -12,6 +12,7 @@ echo Running sftp...
 sftp sftp@$SFTPD_IP <<EOF
 cd project
 ls
+ls .
 EOF
 ssh sftp@$SFTPD_IP cat debug.txt
 
