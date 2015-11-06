@@ -153,7 +153,10 @@ interpretStat st i "." is os es = do
   interpret st is os es
 interpretStat st@ST{..} i path is os es = do
   case splitPath path of
-    "/":rest | length rest > 0 -> do
+    ["/"] -> do
+      send os $ FxpAttrs i (dirAttrs stRootDirectory)
+      interpret st is os es
+    "/":rest -> do
       case lookupEntry' stRootDirectory rest of
         Just (Right File{..}) -> do
           send os $ FxpAttrs i fileAttrs
@@ -213,8 +216,14 @@ entryFxpName' path (Left Directory{..}) =
 entryFxpName' path (Right File{..}) =
   (joinPath' path, fileAttrs)
 
-splitPath path = filter (/= ".")
-  (map T.pack (splitDirectories (T.unpack path)))
+splitPath path = go path'
+  where
+  path' = filter (/= ".")
+    (map T.pack (splitDirectories (T.unpack path)))
+  go [] = []
+  go [x] = [x]
+  go (x:"..":rest) = rest
+  go (x:rest) = x : go rest
 
 joinPath' texts = T.pack (joinPath (map T.unpack texts))
 
