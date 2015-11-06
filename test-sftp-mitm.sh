@@ -14,6 +14,8 @@ cd project
 ls
 ls .
 ls ..
+ls empty
+ls tests
 EOF
 ssh sftp@$SFTPD_IP cat debug.txt
 

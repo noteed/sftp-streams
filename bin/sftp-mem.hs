@@ -179,6 +179,8 @@ data ST = ST
   -- ^ Keep track of an existing FxpReadDir.
   , stHandles :: Map ByteString [Text]
   -- ^ Mapping from handles to open files.
+  , stHandleNames :: [ByteString]
+  -- ^ Supply of handle names.
   }
 
 data Directory =
@@ -196,8 +198,8 @@ data File =
   }
 
 newHandle path st@ST{..} =
-  let h = BC.pack (show (M.size stHandles))
-      st' = st { stHandles = M.insert h path stHandles }
+  let h:rest = stHandleNames
+      st' = st { stHandles = M.insert h path stHandles , stHandleNames = rest }
   in (st', h)
 
 lookupHandle ST{..} h = case M.lookup h stHandles of
@@ -206,7 +208,7 @@ lookupHandle ST{..} h = case M.lookup h stHandles of
   _ -> Nothing
 
 removeHandle st@ST{..} h =
-  st { stHandles = M.delete h stHandles }
+  st { stHandles = M.delete h stHandles , stHandleNames = h : stHandleNames }
 
 entryFxpName (Left Directory{..}) = (dirName, dirAttrs)
 entryFxpName (Right File{..}) = (fileName, fileAttrs)
@@ -276,6 +278,8 @@ initialState = ST
   , stCurrentDirectory = []
   , stReadingDir = Nothing
   , stHandles = M.empty
+  -- Infinite supply of handle names.
+  , stHandleNames = map (BC.pack . show) [0..]
   }
 
 someAttrs =
