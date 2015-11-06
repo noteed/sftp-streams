@@ -4,23 +4,24 @@ Attempt to implement the SSH File Transfer Protocol.
 
 ## Status
 
-At this point, there is a simple executable `sftp-mitm` that can sit between
-`sshd` and the SFTP SSH subsystem (e.g. on Ubuntu this is
-`/usr/lib/openssh/sftp-server`).
+There are two small binaries: `sftp-mitm` and `sftp-mem`.
 
-The program parses the packets exchanged by a regular client and the real SFTP
-program on the server, and display them.
+`sftp-mitm` can sit between `sshd` and the SFTP SSH subsystem (e.g. on Ubuntu
+this is `/usr/lib/openssh/sftp-server`). It parses the packets exchanged by a
+regular client and the real SFTP program on the server, and display them.
 
-There is also a simple executable `sftp-mem` that implements a few commands.
-Those commands are exercised in `test-sftp-sshfs.sh`: it uses SSHFS to talk to
-the executable which exposes a directory held in memory.
+`sftp-mem` implements a few commands. Those commands are exercised in
+`test-sftp-mem.sh` and can be compared to `test-sftp-mitm.sh`. They can be seen
+in [test-batch.txt](test-batch.txt).
+
+`test-sftp-sshs.sh` uses SSHFS to talk to `sftp-mem`.
 
 ## Docker image
 
 Paths are hard-coded in the executable. There is a Dockerfile to create an
 image that matches the expectations. Before building the image, you need to
 provide a public SSH key `insecure_id_rsa.pub` and the `sftp-mitm` binary (put
-them in the `images/sftp-mitm` directory).
+them in the `images/sftp-mitm` directory). Same for `sftp-mem`.
 
 ## Notes
 
