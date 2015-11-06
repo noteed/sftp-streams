@@ -1,0 +1,13 @@
+cd project
+ls
+ls .
+ls ..
+ls empty
+ls tests
+ls README.md
+ls hello.txt
+ls tests/test-00.txt
+ls nonexisting
+ls nonexisting/
+ls nonexisting/text.txt
+ls empty/text.txt

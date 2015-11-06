@@ -9,14 +9,7 @@ SFTPD_IP=$(docker inspect $SFTPD_ID | grep IPAddress | awk '{ print $2 }' | tr -
 sleep 1
 
 echo Running sftp...
-sftp sftp@$SFTPD_IP <<EOF
-cd project
-ls
-ls .
-ls ..
-ls empty
-ls tests
-EOF
+sftp sftp@$SFTPD_IP < test-batch.txt
 ssh sftp@$SFTPD_IP cat debug.txt
 
 echo Killing container...
