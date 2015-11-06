@@ -10,21 +10,10 @@ sleep 1
 
 echo Running sftp...
 sftp sftp@$SFTPD_IP <<EOF
+cd project
 ls
-mkdir /home/sftp/somedir
-cd  /home/sftp/somedir
-mkdir bin
-put -r bin
-cd bin
-ls
-get sftp-mitm.hs delete-me.test-file
-cd /home/sftp
-ls
-cd blah
 EOF
-ssh sftp@$SFTPD_IP ls -la somedir/bin
 ssh sftp@$SFTPD_IP cat debug.txt
-rm delete-me.test-file
 
 echo Killing container...
 docker kill $SFTPD_ID

@@ -10,11 +10,8 @@ sleep 1
 
 echo Running sftp...
 sftp sftp@$SFTPD_IP <<EOF
+cd project
 ls
-cd nonexisting
-cd somedir
-ls
-get hello.txt
 EOF
 ssh sftp@$SFTPD_IP cat debug.txt
 

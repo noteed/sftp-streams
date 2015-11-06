@@ -25,3 +25,12 @@ RUN chown -R sftp:sftp /home/sftp/.ssh
 
 RUN mv /usr/lib/openssh/sftp-server /usr/lib/openssh/sftp-server-original
 ADD sftp-mitm /usr/lib/openssh/sftp-server
+
+# Create known directory structure
+RUN mkdir /home/sftp/project
+RUN echo '# Some project' > /home/sftp/project/README.md
+RUN echo 'Hello world.' > /home/sftp/project/hello.txt
+RUN mkdir /home/sftp/project/empty
+RUN mkdir /home/sftp/project/tests
+RUN echo 'Not a test.' > /home/sftp/project/tests/test-00.txt
+RUN chown -R sftp:sftp /home/sftp/project
